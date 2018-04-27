@@ -65,10 +65,6 @@ def create_model(feats2d, shapes, model_settings, model_architecture,
         return create_2D_VDCNN_LSTM_model(feats2d, shapes, model_settings, is_training)
     elif model_architecture == 'organizers':
         return organizers_model(feats2d, shapes, model_settings, is_training)
-    elif model_architecture == 'cnn_unilstm':
-        return create_CNN_uniLSTM_model(feats2d, shapes, model_settings, is_training)
-    elif model_architecture == '2D_cnn_lstm':
-        return create_2D_CNN_LSTM_model(feats2d, shapes, model_settings, is_training)
     else:
         raise Exception('model_architecture argument "' + model_architecture +
                                         '" not recognized, should be one of "single_fc", "simple_conv2D",' +
@@ -437,13 +433,13 @@ def create_CNN_LSTM_model(feats2d, shapes, model_settings, is_training):
     # Input Layer
     shape = tf.shape(feats2d) # features are of shape [max seq length for batch, 40]
     input_layer = tf.reshape(feats2d,[-1, shape[1], model_settings['feature_width']]) # [batch_size, seq_length, 40]
-    seq_lengths = shapes[:,0]
+
     # Convolutional Layer #1 (Dropout #1) and Pooling Layer #1
     conv1 = tf.layers.conv1d(
       inputs=input_layer,
       filters=model_settings['conv1_num_filters'],
       kernel_size=model_settings['conv1_kernel_size'],
-      padding="same") # [batch_size, ?, num_filters]    
+      padding="same")
 
     if 'is_batch_norm' in model_settings.keys():
         if model_settings['is_batch_norm']:
@@ -466,14 +462,12 @@ def create_CNN_LSTM_model(feats2d, shapes, model_settings, is_training):
 
     pool1 = tf.layers.max_pooling1d(inputs=dropout1, pool_size=model_settings['pool1_pool_size'], strides=model_settings['pool1_strides']) 
 
-    seq_lengths = tf.floor_div(seq_lengths, model_settings['pool1_strides'])
-
     # Convolutional Layer #2 (Dropout #2) and Pooling Layer #2
     conv2 = tf.layers.conv1d(
       inputs=pool1,
       filters=model_settings['conv2_num_filters'],
       kernel_size=model_settings['conv2_kernel_size'],
-      padding="same")    
+      padding="same")
 
     if "is_batch_norm"in model_settings.keys():
         if model_settings['is_batch_norm']:
@@ -494,8 +488,8 @@ def create_CNN_LSTM_model(feats2d, shapes, model_settings, is_training):
     dropout2 = tf.layers.dropout(
       inputs=ac2, rate=dropout_prob, training=is_training)
 
-    pool2 = tf.layers.max_pooling1d(inputs=dropout2, pool_size=model_settings['pool2_pool_size'], strides=model_settings['pool2_strides']) # [batch_size, seq_length/pool1_pool_size/pool2_pool_size, 20/2, conv2_num_filters]
-    seq_lengths = tf.floor_div(seq_lengths, model_settings['pool2_strides'])
+    pool2 = tf.layers.max_pooling1d(inputs=dropout2, pool_size=model_settings['pool2_pool_size'], strides=model_settings['pool2_strides']) # [batch_size, pool2_shape[1], 64]
+
     # in case we want to use a flat output layer from convolutions
     # pool2_flat = tf.layers.flatten(pool2)             # [batch_size, pool2_shape[1] * 64]
     # idem as: 
@@ -503,8 +497,6 @@ def create_CNN_LSTM_model(feats2d, shapes, model_settings, is_training):
     # pool2_flat = tf.reshape(pool2, [-1, pool2_shape[1] * 64]) 
 
     # Get dimensions
-    # divider = model_settings['pool1_pool_size']*model_settings['pool2_pool_size']
-    # seq_lengths = tf.floor_div(shapes[:,0], divider) # all shapes are [seq_length, 40], we extract seq_length and divide it by size of final size of pool2
     lstm_size = model_settings['lstm_size']
 
     # batch_size = tf.shape(feats2d)[0] 
@@ -512,7 +504,6 @@ def create_CNN_LSTM_model(feats2d, shapes, model_settings, is_training):
     # seq_lengths = shapes[:,0] # all shapes are [seq_length, 40], we extract seq_length
     # seq_lengths = tf.shape(pool2)[1]
     # seq_lengths = tf.slice(shapes, [0, 0], [batch_size, 1])
-
     # print(seq_lengths)
 
     # LSTM cells
@@ -522,19 +513,9 @@ def create_CNN_LSTM_model(feats2d, shapes, model_settings, is_training):
     # ini_bw = cell_bw.zero_state(batch_size,dtype=tf.float32)
 
     # Bi-directional RNN (+ Dropout)
+    (output_fw, output_bw), (state_fw, state_bw) = tf.nn.bidirectional_dynamic_rnn(cell_fw, cell_bw, pool2,  
+                                                                dtype=tf.float32)
 
-    if 'is_mask' in model_settings.keys():
-        if model_settings['is_mask']:
-
-            (output_fw, output_bw), (state_fw, state_bw) = tf.nn.bidirectional_dynamic_rnn(cell_fw, cell_bw, pool2, 
-                                                                        sequence_length=seq_lengths,  
-                                                                        dtype=tf.float32)
-        else:
-            (output_fw, output_bw), (state_fw, state_bw) = tf.nn.bidirectional_dynamic_rnn(cell_fw, cell_bw, pool2,   
-                                                                        dtype=tf.float32)
-    else:
-        (output_fw, output_bw), (state_fw, state_bw) = tf.nn.bidirectional_dynamic_rnn(cell_fw, cell_bw, pool2,    
-                                                                        dtype=tf.float32)
     # initial_state_fw = ini_fw, initial_state_bw = ini_bw, 
     # if state_is_tuple, state is a tuple (cell_state, memory_state)
     concat_rnn = tf.concat([state_fw[0], state_bw[0]], axis=1)
@@ -966,8 +947,6 @@ def create_2D_VDCNN_LSTM_model(feats2d, shapes, model_settings, is_training):
     # Input Layer
     shape = tf.shape(feats2d) # features are of shape [max seq length for batch, 40]
     input_layer = tf.reshape(feats2d,tf.stack([-1, shape[1], model_settings['feature_width'], 1])) # [batch_size, seq_length, feature_width, 1]
-    
-    seq_lengths = shapes[:,0]
 
     # Convolutional Layer #1
     conv1 = tf.layers.conv2d(
@@ -976,13 +955,7 @@ def create_2D_VDCNN_LSTM_model(feats2d, shapes, model_settings, is_training):
       kernel_size=model_settings['conv1_kernel_size'],
       padding="same")
 
-    if 'is_batch_norm' in model_settings.keys():
-        if model_settings['is_batch_norm']:
-            batch_n1 = tf.layers.batch_normalization(inputs=conv1,  training=is_training)
-        else:
-            batch_n1 = conv1
-    else:
-        batch_n1 = conv1
+    batch_n1 = tf.layers.batch_normalization(inputs=conv1,  training=is_training)
 
     if model_settings['activation'] == 'sigmoid':
         ac1 = tf.nn.sigmoid(batch_n1)
@@ -995,7 +968,7 @@ def create_2D_VDCNN_LSTM_model(feats2d, shapes, model_settings, is_training):
     # Pooling Layer #1
     pool1 = tf.layers.max_pooling2d(inputs=dropout1, pool_size=model_settings['pool1_pool_size'], strides=model_settings['pool1_strides']) # [batch_size, seq_length/2, 40/2, conv2_num_filters] 
     print(pool1)
-    seq_lengths = tf.floor_div(seq_lengths, model_settings['pool1_strides'])
+
     # Convolutional Layer #2 (Dropout #2) and Pooling Layer #2
     conv2 = tf.layers.conv2d(
       inputs=pool1,
@@ -1003,13 +976,7 @@ def create_2D_VDCNN_LSTM_model(feats2d, shapes, model_settings, is_training):
       kernel_size=model_settings['conv2_kernel_size'],
       padding="same")
 
-    if 'is_batch_norm' in model_settings.keys():
-        if model_settings['is_batch_norm']:
-            batch_n2 = tf.layers.batch_normalization(inputs=conv2,  training=is_training)
-        else:
-            batch_n2 = conv2
-    else:
-        batch_n2 = conv2
+    batch_n2 = tf.layers.batch_normalization(inputs=conv2,  training=is_training)
 
     if model_settings['activation'] == 'sigmoid':
         ac2 = tf.nn.sigmoid(batch_n2)
@@ -1021,7 +988,7 @@ def create_2D_VDCNN_LSTM_model(feats2d, shapes, model_settings, is_training):
 
     pool2 = tf.layers.max_pooling2d(inputs=dropout2, pool_size=model_settings['pool2_pool_size'], strides=model_settings['pool2_strides']) # [batch_size, seq_length/2/2, 20/2, conv2_num_filters]
     print(pool2)
-    seq_lengths = tf.floor_div(seq_lengths, model_settings['pool2_strides'])
+
     # Convolutional Layer #3 (Dropout #3) and Pooling Layer #3
     conv3 = tf.layers.conv2d(
       inputs=pool2,
@@ -1029,13 +996,7 @@ def create_2D_VDCNN_LSTM_model(feats2d, shapes, model_settings, is_training):
       kernel_size=model_settings['conv3_kernel_size'],
       padding="same")
 
-    if 'is_batch_norm' in model_settings.keys():
-        if model_settings['is_batch_norm']:
-            batch_n3 = tf.layers.batch_normalization(inputs=conv3,  training=is_training)
-        else:
-            batch_n3 = conv3
-    else:
-        batch_n3 = conv3
+    batch_n3 = tf.layers.batch_normalization(inputs=conv3,  training=is_training)
 
     if model_settings['activation'] == 'sigmoid':
         ac3 = tf.nn.sigmoid(batch_n3)
@@ -1047,7 +1008,7 @@ def create_2D_VDCNN_LSTM_model(feats2d, shapes, model_settings, is_training):
 
     pool3 = tf.layers.max_pooling2d(inputs=dropout3, pool_size=model_settings['pool3_pool_size'], strides=model_settings['pool3_strides']) # [batch_size, seq_length/2/2/2, 10/2, conv3_num_filters]
     print(pool3)
-    seq_lengths = tf.floor_div(seq_lengths, model_settings['pool3_strides'])
+
     # Convolutional Layer #4 (Dropout #4) and Pooling Layer #4
     conv4 = tf.layers.conv2d(
       inputs=pool3,
@@ -1055,13 +1016,7 @@ def create_2D_VDCNN_LSTM_model(feats2d, shapes, model_settings, is_training):
       kernel_size=model_settings['conv4_kernel_size'],
       padding="same")
 
-    if 'is_batch_norm' in model_settings.keys():
-        if model_settings['is_batch_norm']:
-            batch_n4 = tf.layers.batch_normalization(inputs=conv4,  training=is_training)
-        else:
-            batch_n4 = conv4
-    else:
-        batch_n4 = conv4
+    batch_n4 = tf.layers.batch_normalization(inputs=conv4,  training=is_training)
 
     if model_settings['activation'] == 'sigmoid':
         ac4 = tf.nn.sigmoid(batch_n4)
@@ -1073,7 +1028,7 @@ def create_2D_VDCNN_LSTM_model(feats2d, shapes, model_settings, is_training):
 
     pool4 = tf.layers.max_pooling2d(inputs=dropout4, pool_size=model_settings['pool4_pool_size'], strides=model_settings['pool4_strides']) # [batch_size, seq_length/2/2/2/2, 5/2, conv4_num_filters]
     print(pool4)
-    seq_lengths = tf.floor_div(seq_lengths, model_settings['pool4_strides'])
+
     # Convolutional Layer #5 (Dropout #5) and Pooling Layer #5
     conv5 = tf.layers.conv2d(
       inputs=pool4,
@@ -1081,13 +1036,7 @@ def create_2D_VDCNN_LSTM_model(feats2d, shapes, model_settings, is_training):
       kernel_size=model_settings['conv5_kernel_size'],
       padding="same")
 
-    if 'is_batch_norm' in model_settings.keys():
-        if model_settings['is_batch_norm']:
-            batch_n5 = tf.layers.batch_normalization(inputs=conv5,  training=is_training)
-        else:
-            batch_n5 = conv5
-    else:
-        batch_n5 = conv5
+    batch_n5 = tf.layers.batch_normalization(inputs=conv5,  training=is_training)
 
     if model_settings['activation'] == 'sigmoid':
         ac5 = tf.nn.sigmoid(batch_n5)
@@ -1098,13 +1047,11 @@ def create_2D_VDCNN_LSTM_model(feats2d, shapes, model_settings, is_training):
       inputs=ac5, rate=dropout_prob, training=is_training)
 
     pool5 = tf.layers.max_pooling2d(inputs=dropout5, pool_size=model_settings['pool5_pool_size'], strides=model_settings['pool5_strides']) # [batch_size, seq_length/2/2/2/2, 2/2, conv4_num_filters]
-    seq_lengths = tf.floor_div(seq_lengths, model_settings['pool5_strides'])
+    
     #print(pool4)
 
     pool5_squeezed = tf.squeeze(pool5, axis=[2])
     # Get dimensions
-    # divider = model_settings['pool1_pool_size']*model_settings['pool2_pool_size']*model_settings['pool3_pool_size']*model_settings['pool4_pool_size']*model_settings['pool5_pool_size']
-    # seq_lengths = tf.floor_div(shapes[:,0], divider) # all shapes are [seq_length, 40], we extract seq_length and divide it by size of final size of pool2
     lstm_size = model_settings['lstm_size']
     
     # LSTM cells
@@ -1112,19 +1059,10 @@ def create_2D_VDCNN_LSTM_model(feats2d, shapes, model_settings, is_training):
     cell_bw = tf.contrib.rnn.LSTMCell(lstm_size, state_is_tuple=True)
 
     # Bi-directional RNN (+ Dropout)
-    if 'is_mask' in model_settings.keys():
-        if model_settings['is_mask']:
+    (output_fw, output_bw), (state_fw, state_bw) = tf.nn.bidirectional_dynamic_rnn(cell_fw, cell_bw, pool5_squeezed,  
+                                                                dtype=tf.float32)
 
-            (output_fw, output_bw), (state_fw, state_bw) = tf.nn.bidirectional_dynamic_rnn(cell_fw, cell_bw, pool5_squeezed, 
-                                                                        sequence_length=seq_lengths,  
-                                                                        dtype=tf.float32)
-        else:
-            (output_fw, output_bw), (state_fw, state_bw) = tf.nn.bidirectional_dynamic_rnn(cell_fw, cell_bw, pool5_squeezed,   
-                                                                        dtype=tf.float32)
-    else:
-        (output_fw, output_bw), (state_fw, state_bw) = tf.nn.bidirectional_dynamic_rnn(cell_fw, cell_bw, pool5_squeezed,    
-                                                                        dtype=tf.float32)
-
+    # initial_state_fw = ini_fw, initial_state_bw = ini_bw, 
     # if state_is_tuple, state is a tuple (cell_state, memory_state)
     concat_rnn = tf.concat([state_fw[0], state_bw[0]], axis=1)
 
@@ -1152,7 +1090,7 @@ def organizers_model(feats2d, shapes, model_settings, is_training):
     shape = tf.shape(feats2d) # features are of shape [max seq length for batch, 40]
     x = tf.reshape(feats2d,[-1, shape[1], model_settings['feature_width']]) # [batch_size, seq_length, 40]
     shape_list = shapes[:,0] # all shapes are [seq_length, 40], we extract seq_length
-    is_batchnorm = model_settings['is_batch_norm']
+    is_batchnorm = True
 
     featdim = model_settings['feature_width'] #channel
     weights = []
@@ -1205,8 +1143,6 @@ def organizers_model(feats2d, shapes, model_settings, is_training):
 
     if model_settings['before_softmax'] == 'lstm':
         # Get dimensions
-        # divider = model_settings['pool1_pool_size']*model_settings['pool2_pool_size']
-        seq_lengths = shape_list 
         lstm_size = model_settings['lstm_size']
         
         # LSTM cells
@@ -1214,18 +1150,8 @@ def organizers_model(feats2d, shapes, model_settings, is_training):
         cell_bw = tf.contrib.rnn.LSTMCell(lstm_size, state_is_tuple=True)
 
         # Bi-directional RNN (+ Dropout)
-        if 'is_mask' in model_settings.keys():
-            if model_settings['is_mask']:
-
-                (output_fw, output_bw), (state_fw, state_bw) = tf.nn.bidirectional_dynamic_rnn(cell_fw, cell_bw, conv4r, 
-                                                                            sequence_length=seq_lengths,  
-                                                                            dtype=tf.float32)
-            else:
-                (output_fw, output_bw), (state_fw, state_bw) = tf.nn.bidirectional_dynamic_rnn(cell_fw, cell_bw, conv4r,   
-                                                                            dtype=tf.float32)
-        else:
-            (output_fw, output_bw), (state_fw, state_bw) = tf.nn.bidirectional_dynamic_rnn(cell_fw, cell_bw, conv4r,    
-                                                                            dtype=tf.float32)
+        (output_fw, output_bw), (state_fw, state_bw) = tf.nn.bidirectional_dynamic_rnn(cell_fw, cell_bw, conv4r,  
+                                                                    dtype=tf.float32)
 
         # if state_is_tuple, state is a tuple (cell_state, memory_state)
         concat_rnn = tf.concat([state_fw[0], state_bw[0]], axis=1)
@@ -1252,7 +1178,7 @@ def organizers_model(feats2d, shapes, model_settings, is_training):
         ac1 = tf.nn.relu(fc1_bn)
         fc2 = fc_layer(ac1,model_settings['fc2_size'],"fc2")
         fc2_bn = batch_norm_wrapper_fc(fc2, is_training,'bn6',is_batchnorm)
-        ac2 = tf.nn.relu(fc2_bn)
+        ac2 = tf.nn.relu(fc2_bn)    
         logits = fc_layer(ac2,model_settings['num_classes'],"fc3")
 
         print(fc1) # [batch_size, 1500]
@@ -1342,282 +1268,3 @@ def batch_norm_wrapper_fc( inputs, is_training, name, is_batchnorm, decay = 0.99
                 return tf.nn.batch_normalization(inputs, pop_mean, pop_var, beta, scale, epsilon)
     else:
         return inputs
-
-def create_CNN_uniLSTM_model(feats2d, shapes, model_settings, is_training):
-    """Builds a standard convolutional model.
-
-                (feats2d)
-                    v
-            [Conv1D]
-                    v
-            [BiasAdd]
-                    v
-                [Relu]
-                    v
-            [MaxPool]
-                    v
-            [Conv1D]
-                    v
-            [BiasAdd]
-                    v
-                [Relu]
-                    v
-            [MaxPool]
-                    v
-            [BiLSTM]<-(cell_fw, cell_bw)
-                    v
-                [Dense]
-                    v
-
-    Args:
-        feats2d: TensorFlow node that will output audio feature vectors.
-        model_settings: Dictionary of information about the model.
-        is_training: Whether the model is going to be used for training.
-
-    Returns:
-        TensorFlow node outputting logits results, and optionally a dropout
-        placeholder.
-    """
-    if is_training:
-        dropout_prob = model_settings['dropout_prob']
-    else:
-        dropout_prob = 0
-
-    # Input Layer
-    shape = tf.shape(feats2d) # features are of shape [max seq length for batch, 40]
-    input_layer = tf.reshape(feats2d,[-1, shape[1], model_settings['feature_width']]) # [batch_size, seq_length, 40]
-    seq_lengths = shapes[:,0]
-    # Convolutional Layer #1 (Dropout #1) and Pooling Layer #1
-    conv1 = tf.layers.conv1d(
-      inputs=input_layer,
-      filters=model_settings['conv1_num_filters'],
-      kernel_size=model_settings['conv1_kernel_size'],
-      padding="same")
-
-    if 'is_batch_norm' in model_settings.keys():
-        if model_settings['is_batch_norm']:
-            batch_n1 = tf.layers.batch_normalization(inputs=conv1,  training=is_training)
-        else:
-            batch_n1 = conv1
-    else:
-        batch_n1 = conv1
-
-    if "activation" in model_settings.keys():
-        if model_settings['activation'] == 'sigmoid':
-            ac1 = tf.nn.sigmoid(batch_n1)
-        else:
-            ac1 = tf.nn.relu(batch_n1)
-    else:
-        ac1 = tf.nn.relu(batch_n1)
-
-    dropout1 = tf.layers.dropout(
-      inputs=ac1, rate=dropout_prob, training=is_training)
-
-    pool1 = tf.layers.max_pooling1d(inputs=dropout1, pool_size=model_settings['pool1_pool_size'], strides=model_settings['pool1_strides']) 
-    seq_lengths = tf.floor_div(seq_lengths, model_settings['pool1_strides'])
-    # Convolutional Layer #2 (Dropout #2) and Pooling Layer #2
-    conv2 = tf.layers.conv1d(
-      inputs=pool1,
-      filters=model_settings['conv2_num_filters'],
-      kernel_size=model_settings['conv2_kernel_size'],
-      padding="same")
-
-    if "is_batch_norm"in model_settings.keys():
-        if model_settings['is_batch_norm']:
-            batch_n2 = tf.layers.batch_normalization(inputs=conv2,  training=is_training)
-        else:
-            batch_n2 = conv2
-    else:
-        batch_n2 = conv2
-        
-    if "activation" in model_settings.keys():
-        if model_settings['activation'] == 'sigmoid':
-            ac2 = tf.nn.sigmoid(batch_n2)
-        else:
-            ac2 = tf.nn.relu(batch_n2)
-    else:
-        ac2 = tf.nn.relu(batch_n2)
-
-    dropout2 = tf.layers.dropout(
-      inputs=ac2, rate=dropout_prob, training=is_training)
-
-    pool2 = tf.layers.max_pooling1d(inputs=dropout2, pool_size=model_settings['pool2_pool_size'], strides=model_settings['pool2_strides']) # [batch_size, pool2_shape[1], 64]
-    seq_lengths = tf.floor_div(seq_lengths, model_settings['pool2_strides'])
-    # in case we want to use a flat output layer from convolutions
-    # pool2_flat = tf.layers.flatten(pool2)             # [batch_size, pool2_shape[1] * 64]
-    # idem as: 
-    # pool2_shape = tf.shape(pool2)   
-    # pool2_flat = tf.reshape(pool2, [-1, pool2_shape[1] * 64]) 
-
-    # Get dimensions
-    lstm_size = model_settings['lstm_size']
-    batch_size = tf.shape(feats2d)[0] 
-
-   # create a BasicRNNCell
-    rnn_cell = tf.nn.rnn_cell.BasicRNNCell(lstm_size)
-
-    # 'outputs' is a tensor of shape [batch_size, max_time, cell_state_size]
-
-    # defining initial state
-    initial_state = rnn_cell.zero_state(batch_size, dtype=tf.float32)
-
-    # 'state' is a tensor of shape [batch_size, cell_state_size]
-    outputs, state = tf.nn.dynamic_rnn(rnn_cell, pool2,
-                                       initial_state=initial_state, sequence_length=seq_lengths,
-                                       dtype=tf.float32)
-
-    if is_training:
-        first_dropout = tf.nn.dropout(state, dropout_prob)
-    else:
-        first_dropout = state
-
-    # Logits Layer
-    num_classes = model_settings['num_classes']
-    logits = tf.layers.dense(inputs=first_dropout, units=num_classes)
-    
-    if is_training:
-        return logits, dropout_prob
-    else:
-        return logits
-
-def create_2D_CNN_LSTM_model(feats2d, shapes, model_settings, is_training):
-    """Builds a standard convolutional model.
-
-                (feats2d)
-                    v
-            [Conv1D]
-                    v
-            [BiasAdd]
-                    v
-                [Relu]
-                    v
-            [MaxPool]
-                    v
-            [Conv1D]
-                    v
-            [BiasAdd]
-                    v
-                [Relu]
-                    v
-            [MaxPool]
-                    v
-            [BiLSTM]<-(cell_fw, cell_bw)
-                    v
-                [Dense]
-                    v
-
-    Args:
-        feats2d: TensorFlow node that will output audio feature vectors.
-        model_settings: Dictionary of information about the model.
-        is_training: Whether the model is going to be used for training.
-
-    Returns:
-        TensorFlow node outputting logits results, and optionally a dropout
-        placeholder.
-    """
-    if is_training:
-        dropout_prob = model_settings['dropout_prob']     
-    else:
-        dropout_prob = 0
-    # Input Layer
-    shape = tf.shape(feats2d) # features are of shape [max seq length for batch, 40]
-    input_layer = tf.reshape(feats2d,tf.stack([-1, shape[1], model_settings['feature_width'], 1])) # [batch_size, seq_length, feature_width, 1]
-    seq_lengths = shapes[:,0]
-    # Convolutional Layer #1
-    conv1 = tf.layers.conv2d(
-      inputs=input_layer, strides=2,
-      filters=model_settings['conv1_num_filters'],
-      kernel_size=model_settings['conv1_kernel_size'],
-      padding="same")
-
-    print(conv1)
-
-    if 'is_batch_norm' in model_settings.keys():
-        if model_settings['is_batch_norm']:
-            batch_n1 = tf.layers.batch_normalization(inputs=conv1,  training=is_training)
-        else:
-            batch_n1 = conv1
-    else:
-        batch_n1 = conv1
-
-    if model_settings['activation'] == 'sigmoid':
-        ac1 = tf.nn.sigmoid(batch_n1)
-    else:
-        ac1 = tf.nn.relu(batch_n1)
-
-    dropout1 = tf.layers.dropout(
-      inputs=ac1, rate=dropout_prob, training=is_training)
-
-    # Pooling Layer #1
-    pool1 = tf.layers.max_pooling2d(inputs=dropout1, pool_size=model_settings['pool1_pool_size'], strides=model_settings['pool1_strides']) # [batch_size, seq_length/2, 40/2, conv2_num_filters] 
-    print(pool1)
-    seq_lengths = tf.floor_div(seq_lengths, model_settings['pool1_strides'][0])
-    # Convolutional Layer #2 (Dropout #2) and Pooling Layer #2
-    conv2 = tf.layers.conv2d(
-      inputs=pool1, strides=2,
-      filters=model_settings['conv2_num_filters'],
-      kernel_size=model_settings['conv2_kernel_size'],
-      padding="same")
-
-    print(conv2)
-
-    if "is_batch_norm"in model_settings.keys():
-        if model_settings['is_batch_norm']:
-            batch_n2 = tf.layers.batch_normalization(inputs=conv2,  training=is_training)
-        else:
-            batch_n2 = conv2
-    else:
-        batch_n2 = conv2
-
-    if model_settings['activation'] == 'sigmoid':
-        ac2 = tf.nn.sigmoid(batch_n2)
-    else:
-        ac2 = tf.nn.relu(batch_n2)
-
-    dropout2 = tf.layers.dropout(
-      inputs=ac2, rate=dropout_prob, training=is_training)
-
-    pool2 = tf.layers.max_pooling2d(inputs=dropout2, pool_size=model_settings['pool2_pool_size'], strides=model_settings['pool2_strides']) # [batch_size, seq_length/2/2, 20/2, conv2_num_filters]
-    print(pool2)
-    seq_lengths = tf.floor_div(seq_lengths, model_settings['pool2_strides'][0])
-    pool2_squeezed = tf.squeeze(pool2, axis=[2])
-
-    # Get dimensions
-    # divider = model_settings['pool1_pool_size'][0]*model_settings['pool2_pool_size'][0]
-    # seq_lengths = tf.floor_div(shapes[:,0], divider) # all shapes are [seq_length, 40], we extract seq_length and divide it by size of final size of pool2
-    lstm_size = model_settings['lstm_size']
-
-    # LSTM cells
-    cell_fw = tf.contrib.rnn.LSTMCell(lstm_size, state_is_tuple=True)
-    cell_bw = tf.contrib.rnn.LSTMCell(lstm_size, state_is_tuple=True)
-
-    # Bi-directional RNN (+ Dropout)
-    if 'is_mask' in model_settings.keys():
-        if model_settings['is_mask']:
-
-            (output_fw, output_bw), (state_fw, state_bw) = tf.nn.bidirectional_dynamic_rnn(cell_fw, cell_bw, pool2_squeezed, 
-                                                                        sequence_length=seq_lengths,  
-                                                                        dtype=tf.float32)
-        else:
-            (output_fw, output_bw), (state_fw, state_bw) = tf.nn.bidirectional_dynamic_rnn(cell_fw, cell_bw, pool2_squeezed,   
-                                                                        dtype=tf.float32)
-    else:
-        (output_fw, output_bw), (state_fw, state_bw) = tf.nn.bidirectional_dynamic_rnn(cell_fw, cell_bw, pool2_squeezed,    
-                                                                        dtype=tf.float32)
-
-    # if state_is_tuple, state is a tuple (cell_state, memory_state)
-    concat_rnn = tf.concat([state_fw[0], state_bw[0]], axis=1)
-
-    if is_training:
-        first_dropout = tf.nn.dropout(concat_rnn, dropout_prob)
-    else:
-        first_dropout = concat_rnn
-
-    # Logits Layer
-    num_classes = model_settings['num_classes']
-    logits = tf.layers.dense(inputs=first_dropout, units=num_classes)
-    
-    if is_training:
-        return logits, dropout_prob
-    else:
-        return logits

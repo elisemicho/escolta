@@ -48,41 +48,25 @@ TEST_FILE = os.path.join(model_settings["data_dir"],model_settings["test_file"])
 with tf.Graph().as_default():    
         
     # Input images and labels
-    train_label_batch, train_feat2d_batch, train_shape_batch = inputs(
+    label_batch, feat2d_batch, shape_batch = inputs(
             TRAIN_FILE, batch_size=model_settings["batch_size"])
-    # Input images and labels.
-    valid_label_batch, valid_feat2d_batch, valid_shape_batch = inputs(VALIDATION_FILE, batch_size=model_settings["batch_size"], shuffle=False)
-
-    # Input images and labels.
-    test_label_batch, test_feat2d_batch, test_shape_batch = inputs(TEST_FILE, batch_size=model_settings["batch_size"], shuffle=False)
-    print("Initialize data Pipeline, Done!", flush=True)
+    
     # Build a Graph that computes predictions from the model
-    with tf.variable_scope(tf.get_variable_scope(), reuse=tf.AUTO_REUSE):                
-        train_logits, dropout_prob = models.create_model(
-            train_feat2d_batch, train_shape_batch,
+    logits, dropout_prob = models.create_model(
+            feat2d_batch, shape_batch,
             model_settings,
             model_settings["model_architecture"],
             is_training=True)
-        tf.get_variable_scope().reuse_variables()
-        # for test on evaluation set
-        valid_logits = models.create_model(
-            valid_feat2d_batch, valid_shape_batch,
-            model_settings,
-            model_settings["model_architecture"],
-            is_training=False)
-        tf.get_variable_scope().reuse_variables()
-        
+
     # Define loss
     with tf.name_scope('cross_entropy'):
         loss = tf.losses.sparse_softmax_cross_entropy(
-                labels=train_label_batch, logits=train_logits)   
-        valid_loss = tf.losses.sparse_softmax_cross_entropy(
-                labels=valid_label_batch, logits=valid_logits)
+                labels=label_batch, logits=logits)   
     tf.summary.scalar('cross_entropy', loss)
     
     # Define optimizer
     with tf.name_scope('train_optimizer'):
-        
+        #self.lr = tf.Variable(0.0, trainable=False)
         tvars = tf.trainable_variables()
         if "grad_clip" in model_settings.keys():
             grads, _ = tf.clip_by_global_norm(tf.gradients(loss, tvars),model_settings["grad_clip"])
@@ -101,24 +85,14 @@ with tf.Graph().as_default():
         train_step = optimizer.apply_gradients(zip(grads, tvars))
 
     # Define evaluation metrics
-    train_predicted_indices = tf.argmax(train_logits, 1)
-    train_correct_prediction = tf.equal(train_predicted_indices, train_label_batch)
-    train_confusion_matrix = tf.confusion_matrix(
-            train_label_batch, train_predicted_indices, num_classes=model_settings["num_classes"])
-    train_evaluation_step = tf.reduce_mean(tf.cast(train_correct_prediction, tf.float32))
-    
-    tf.summary.scalar('accuracy_on_train', train_evaluation_step)
-    
-    # evaluation metrics for dev pipeline
-    valid_predicted_indices = tf.argmax(valid_logits, 1)
-    valid_correct_prediction = tf.equal(valid_predicted_indices, valid_label_batch)
-    valid_confusion_matrix = tf.confusion_matrix(
-            valid_label_batch, valid_predicted_indices, num_classes=model_settings["num_classes"])
-    valid_evaluation_step = tf.reduce_mean(tf.cast(valid_correct_prediction, tf.float32))
+    predicted_indices = tf.argmax(logits, 1)
+    correct_prediction = tf.equal(predicted_indices, label_batch)
+    confusion_matrix = tf.confusion_matrix(
+            label_batch, predicted_indices, num_classes=model_settings["num_classes"])
+    evaluation_step = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
+    tf.summary.scalar('accuracy', evaluation_step)
 
-    tf.summary.scalar('accuracy_on_dev', valid_evaluation_step)    
-
-    saver = tf.train.Saver(tf.global_variables(),max_to_keep=270)
+    saver = tf.train.Saver(tf.global_variables(),max_to_keep=180)
 
     # Merge all the summaries
     merged_summaries = tf.summary.merge_all()
@@ -139,10 +113,10 @@ with tf.Graph().as_default():
         if tf.train.latest_checkpoint(checkpoint_dir):
             training_step = int(tf.train.latest_checkpoint(checkpoint_dir).split("-")[-1])
             saver.restore(sess, tf.train.latest_checkpoint(checkpoint_dir))
-            print("Training in progression", flush=True)
-            print("Model %s loaded"%tf.train.latest_checkpoint(checkpoint_dir), flush=True)
+            print("Training in progression")
+            print("Model %s loaded"%tf.train.latest_checkpoint(checkpoint_dir))
         else:
-            print("Training from scratch", flush=True)
+            print("Training from scratch")
             training_step = 0
        
         # Training loop.
@@ -151,14 +125,14 @@ with tf.Graph().as_default():
         print('Train set size = ', train_set_size)
         
         for epoch in range(1, model_settings["num_epochs"] + 1):
-            print('Epoch #%d:' % (epoch), flush=True)
+            print('Epoch #%d:' % (epoch))
             total_loss = []
             for _step in range(1, int(train_set_size / model_settings["batch_size"]) + 1):
                 training_step = training_step + 1 # global training step                
                 # Run one training step of the model:
                 # Train model, write summary, compute loss, compute accuracy
                 _, train_summary, train_loss, train_accuracy = sess.run(
-                [train_step, merged_summaries, loss, train_evaluation_step])
+                [train_step, merged_summaries, loss, evaluation_step])
 
                 # Report
                 train_writer.add_summary(train_summary, training_step)
@@ -169,24 +143,26 @@ with tf.Graph().as_default():
 
                     print('Step #%d: rate %f, loss %f, accuracy %.1f%%' %
                                                 (training_step, model_settings["learning_rate"], np.mean(total_loss), 
-                                                 train_accuracy * 100), flush=True)                    
+                                                 train_accuracy * 100))                    
 
                 if (training_step % model_settings["eval_step_interval"]) == 0:
 
                     valid_set_size = get_dataset_shape(VALIDATION_FILE)
-                    print('Valid set size = ', valid_set_size)
                     #total_accuracy = 0
                     total_predictions = []
                     total_correct_labels = []
-                                        
+
+                    # Input images and labels.
+                    valid_label_batch, valid_feat2d_batch, valid_shape_batch = inputs(VALIDATION_FILE, batch_size=model_settings["batch_size"])
+                    
                     for i in range(0, valid_set_size, model_settings["batch_size"]):
                         # Run evaluation step and capture training summaries for TensorBoard
                         # with the `merged` op.                        
                         valid_label_batch_, validation_summary, validation_loss, validation_accuracy, conf_matrix, validation_predictions = sess.run(
-                            [valid_label_batch, merged_summaries, valid_loss, valid_evaluation_step, valid_confusion_matrix, valid_predicted_indices])
+                            [valid_label_batch, merged_summaries, loss, evaluation_step, confusion_matrix, predicted_indices])
                         
                         # Report
-                        validation_writer.add_summary(validation_summary, valid_accuracy)
+                        validation_writer.add_summary(validation_summary, training_step)
                         #batch_size = min(FLAGS.batch_size, valid_set_size - i)
                         #total_accuracy += (validation_accuracy * batch_size) / valid_set_size 
                     
@@ -196,24 +172,59 @@ with tf.Graph().as_default():
                     #print("predictions",total_predictions)
                     #print("correct labels", total_correct_labels)
                     
-                    #print("ground_truth",total_correct_labels)
-                    #print("prediction",total_predictions)
+                    print("prediction",total_correct_labels)
+                    print("ground_truth",total_predictions)
                     
                     
                     print('Step #%d: Validation accuracy %f, f1_score (macro) %f' %
                                                     (training_step, 
                                                      sk.accuracy_score(total_correct_labels, total_predictions),
-                                        sk.f1_score(total_correct_labels, total_predictions, average="macro")), flush=True)
+                                        sk.f1_score(total_correct_labels, total_predictions, average="macro")))
                     print('Confusion Matrix:')
-                    print(sk.confusion_matrix(total_correct_labels, total_predictions), flush=True)
+                    print(sk.confusion_matrix(total_correct_labels, total_predictions))
                     print(sk.classification_report(total_correct_labels, total_predictions, 
-                                                  target_names=['EGY','GLF','LAV','MSA','NOR'])+'\n', flush=True)                    
-                    #sys.stdout.flush()      
+                                                  target_names=['EGY','GLF','LAV','MSA','NOR'])+'\n')                    
+                          
                 # Save the model checkpoint periodically.
                 if (training_step % model_settings["save_step_interval"] == 0):
                     checkpoint_path = os.path.join(model_settings["model_dir"], model_settings["model_ID"], 'model.ckpt')
-                    print('Saving to "%s-%d"' %(checkpoint_path, training_step), flush=True)
+                    print('Saving to "%s-%d"' %(checkpoint_path, training_step))
                     saver.save(sess, checkpoint_path, global_step=training_step)
                     
-        print('Done training for %d epochs, %d steps each.\n' % (epoch,training_step), flush=True)
+        print('Done training for %d epochs, %d steps each.\n' % (epoch,training_step))
+        
+        # Testing loop
+        print('TEST')
+        test_set_size = get_dataset_shape(TEST_FILE)
+        print('Test set size = ', test_set_size)
+        #total_accuracy = 0
+        total_predictions = []
+        total_correct_labels = []
+
+        # Input images and labels.
+        test_label_batch, test_feat2d_batch, test_shape_batch = inputs(TEST_FILE, batch_size=model_settings["batch_size"])
+            
+        for i in range(0, test_set_size, model_settings["batch_size"]):
+            # Run evaluation step
+            test_accuracy, test_predictions = sess.run(
+                [evaluation_step, predicted_indices])
+            
+            # Report 
+            #batch_size = min(FLAGS.batch_size, test_set_size - i)
+            #total_accuracy += (test_accuracy * batch_size) / test_set_size
+            
+            total_predictions.extend(test_predictions)
+            total_correct_labels.extend(test_label_batch.eval())
+            
+        print("predictions",total_predictions)
+        print("correct labels", total_correct_labels)
+            
+        print('Test accuracy %f, f1_score (macro) %f (N=%d)' %
+                                                    (sk.accuracy_score(total_correct_labels, total_predictions),
+                                        sk.f1_score(total_correct_labels, total_predictions, average="macro"),
+                                                     test_set_size))
+        print('Confusion Matrix:')
+        print(sk.confusion_matrix(total_correct_labels, total_predictions))
+        print(sk.classification_report(total_correct_labels, total_predictions, 
+                                                  target_names=['EGY','GLF','LAV','MSA','NOR'])+'\n')
 
