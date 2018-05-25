@@ -62,28 +62,9 @@ predict_probs = []
 checkpoints = ["model.ckpt-84000","model.ckpt-98500","model.ckpt-21000","model.ckpt-48500","model.ckpt-113500"]
 config_dirs = ["models/b_1/config.json","models/b_2/config.json","models/b_3/config.json","models/b_4/config.json","models/b_5/config.json"]
 
-for i in range(4):
+for i in range(5):
     model_ = ImportGraph(config_dirs[i], checkpoints[i])
     predicted_prob , label_ = model_.run()
-    #predict_probs.append(predicted_prob)
-    #total_correct_labels = label_
     statistic = {"probs": predicted_prob, "truth_labels": label_ }
     np.savez("prediction/statistics.%d.npz"%i, **statistic)
-
-"""
-predict_probs = np.array(predict_probs)
-total_predictions = []
-for j in range(predict_probs.shape[1]):
-    probs = []
-    for i in range(5):
-        probs.append(predict_probs[i,j])
-    total_predictions.append(max(predict_probs))
-
-print('Validation accuracy %f, f1_score (macro) %f' % (sk.accuracy_score(total_correct_labels, total_predictions),
-                                        sk.f1_score(total_correct_labels, total_predictions, average="macro")))
-print('Confusion Matrix:')
-print(sk.confusion_matrix(total_correct_labels, total_predictions))
-print(sk.classification_report(total_correct_labels, total_predictions,
-                                                  target_names=['EGY','GLF','LAV','MSA','NOR'])+'\n')
-"""
         
